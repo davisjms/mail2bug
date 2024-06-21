@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -30,7 +31,7 @@ namespace Mail2BugUnitTests
             }
             message.PlainTextBody = bodyBuilder.ToString();
 
-            Assert.AreEqual(lastMessageText, EmailBodyProcessingUtils.GetLastMessageText(message), "Verifying extracted last message text correctness");
+            Assert.AreEqual(lastMessageText, EmailBodyProcessingUtils.GetLastMessageText(message, true), "Verifying extracted last message text correctness");
         }
 
         [TestMethod]
@@ -44,7 +45,7 @@ namespace Mail2BugUnitTests
 
             // Can't have '<' or '>' chars in the content, since it breaks the HTML processing. This is OK, since real HTML should never have these
             // chracters either (they will be escaped as &lt; and &gt;)
-            var expectedText = 
+            var expectedText =
                 StringFactory.GenerateRandomString(properties, _rand.Next()).Trim().Replace("<", "").Replace(">", "");
             var htmlText = string.Format("<html><head></head><body><p>{0}</p></body></html>", expectedText);
             var plainText = EmailBodyProcessingUtils.ConvertHtmlMessageToPlainText(htmlText);
@@ -68,6 +69,75 @@ namespace Mail2BugUnitTests
                 var convertedHtml = Normalize(EmailBodyProcessingUtils.ConvertHtmlMessageToPlainText(html));
 
                 Assert.AreEqual(expectedText, convertedHtml);
+            }
+        }
+
+        [TestMethod]
+        public void TestUpdateEmbeddedImageLinks_Basic()
+        {
+            string original = @"<html>
+<body>
+<img src=""cid:123"" >
+</body>
+</html>";
+
+            IReadOnlyCollection<MessageAttachmentInfo> attachmentInfo = new List<MessageAttachmentInfo>
+            {
+                new MessageAttachmentInfo(@"x:\image.png", "123"),
+            };
+
+            // Note: it's acceptable to not preserve whitespace / insert empty HTML tags because we're
+            // manipulating HTML, not plain text. As long as the rendered page isn't impacted, all is well
+            string expected = @"<html><head></head><body>
+<img src=""file:///x:/image.png"">
+
+</body></html>";
+
+            string actual = EmailBodyProcessingUtils.UpdateEmbeddedImageLinks(original, attachmentInfo);
+            Assert.AreEqual(Normalize(expected), Normalize(actual));
+        }
+
+        [TestMethod]
+        public void TestGetLastMessageText_NoPrevious()
+        {
+            string original = @"<html>
+<body>
+This is a boring email.
+</body>
+</html>";
+
+            // Note: it's acceptable to not preserve whitespace / insert empty HTML tags because we're
+            // manipulating HTML, not plain text. As long as the rendered page isn't impacted, all is well
+            string expected = @"<html><head></head><body>
+This is a boring email.
+
+</body></html>";
+
+            string actual = EmailBodyProcessingUtils.GetLastMessageText_Html(original);
+            Assert.AreEqual(Normalize(expected), Normalize(actual));
+        }
+
+        [TestMethod]
+        public void TestGetLastMessageText_EmailClientsSchemas()
+        {
+            const string schemasFolder = "LastMessageSchemas";
+            foreach (var originalFilename in Directory.GetFiles(schemasFolder, "*.orig"))
+            {
+                Trace.WriteLine(string.Format("Processing email schema file {0}", originalFilename));
+
+                var baseFilename = Path.GetFileNameWithoutExtension(originalFilename);
+                var expectedFilename = Path.Combine(schemasFolder, baseFilename + ".expected");
+
+                var original = File.ReadAllText(originalFilename);
+                var expected = Normalize(File.ReadAllText(expectedFilename));
+                var actual = Normalize(EmailBodyProcessingUtils.GetLastMessageText_Html(original));
+
+                // Note: it's acceptable to not preserve whitespace because it's
+                // manipulating HTML, not plain text. As long as the rendered page isn't impacted, all is well
+                // Note that we expect that both
+                // 1. Elements following the latest message are removed
+                // 2. Anything in the same element as the latest message but after the start of the previous should be cleared out
+                Assert.AreEqual(expected, actual);
             }
         }
 
